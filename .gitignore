@@ -66,3 +66,12 @@ server.log
 
 # tool outputs
 /tool-results/
+# --- more sandbox-only files (never upload these) ---
+/workspace_extracted/
+/scripts/
+/studypad-data-points.md
+*.tar
+*.tar.gz
+.eslintcache
+nohup.out
+.nohup.out

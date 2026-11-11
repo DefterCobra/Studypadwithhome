@@ -11,10 +11,17 @@ import {
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { hasStoredData } from '@/lib/notepad/idb-storage'
+import { GUEST_USER_ID } from '@/lib/notepad/active-user'
+import { useUsersStore } from '@/lib/notepad/users'
 import { useNotepadStore } from '@/lib/notepad/store'
 
-/** set once the user has made (or implicitly accepted) a choice — gates the dialog */
+/** legacy global flag from before multi-user existed — Guest inherits it */
 const WELCOME_KEY = 'studypad-welcomed-v1'
+
+/** the welcome question is answered once per user, not once per browser */
+function userWelcomeKey(userId: string): string {
+  return `studypad-welcomed-u-${userId}`
+}
 
 interface VisitInfo {
   /** ask the keep-or-fresh question now */
@@ -28,13 +35,22 @@ interface VisitInfo {
  * first-time visitors (seeded test data in view) as well as people who used
  * the app before this dialog existed (their own notes in view).
  *
+ * Per user: every newly added user is asked on their first entry, even if the
+ * browser answered before. Guest inherits the pre-multiuser global answer so
+ * existing users are not asked again after upgrading.
+ *
  * Runs only after the store has hydrated, so `hasStoredData()` already knows
- * whether IndexedDB (or the migrated legacy localStorage copy) held data.
+ * whether the user's partition (or a migrated legacy copy) held data.
  */
-function detectVisit(): VisitInfo {
+function detectVisit(userId: string): VisitInfo {
   if (typeof window === 'undefined') return { show: false, returning: false }
   try {
-    if (localStorage.getItem(WELCOME_KEY)) return { show: false, returning: false }
+    if (localStorage.getItem(userWelcomeKey(userId))) return { show: false, returning: false }
+    if (userId === GUEST_USER_ID && localStorage.getItem(WELCOME_KEY)) {
+      // upgrade path: the browser already answered before multi-user existed
+      localStorage.setItem(userWelcomeKey(userId), 'migrated')
+      return { show: false, returning: false }
+    }
     return { show: true, returning: hasStoredData() }
   } catch {
     return { show: false, returning: false } // storage unavailable — don't nag
@@ -58,9 +74,11 @@ interface WelcomeDialogProps {
  * the current data.
  */
 export function WelcomeDialog({ onChoose }: WelcomeDialogProps) {
-  // the parent renders this component only after hydration, so the initializer
-  // can safely probe localStorage (guarded for SSR regardless)
-  const [visit] = useState(detectVisit)
+  // the parent renders this component only after a user has entered, so the
+  // current user id is known and the initializer can safely probe localStorage
+  // (guarded for SSR regardless)
+  const currentUserId = useUsersStore((s) => s.currentUserId) ?? GUEST_USER_ID
+  const [visit] = useState(() => detectVisit(currentUserId))
   const [open, setOpen] = useState(visit.show)
   // keep the latest callback without re-triggering effects
   const onChooseRef = useRef(onChoose)
@@ -70,7 +88,7 @@ export function WelcomeDialog({ onChoose }: WelcomeDialogProps) {
 
   const acknowledge = (choice: WelcomeChoice) => {
     try {
-      localStorage.setItem(WELCOME_KEY, choice)
+      localStorage.setItem(userWelcomeKey(currentUserId), choice)
     } catch {
       // ignore — the in-memory choice still applies for this session
     }

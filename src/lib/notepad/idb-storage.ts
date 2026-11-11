@@ -1,5 +1,6 @@
 /**
- * IndexedDB-backed storage for the notepad store (via localforage).
+ * IndexedDB-backed storage for the notepad store (via localforage),
+ * partitioned per user.
  *
  * Replaces the old localStorage persistence — localStorage caps out at
  * ~5 MB, while IndexedDB comfortably holds hundreds of MB, which matters
@@ -8,27 +9,59 @@
  * and transparently falls back to localStorage only in the rare browsers
  * where IndexedDB is unavailable.
  *
- * The first read transparently migrates legacy data: if IndexedDB has
- * nothing under the key yet but old localStorage data exists, the value
- * is copied into IndexedDB and the legacy key is removed afterwards — so
- * existing users keep every note without doing anything.
+ * Multi-user: every user gets their own object store (`u-<userId>`) inside
+ * the shared `studypad` database, and the store above the persist middleware
+ * calls setActiveUserId() before rehydrating, so reads and writes land in the
+ * right partition. The storage layer itself stays stateless between users.
+ *
+ * Migration chain (each step only ever feeds Guest's partition, because
+ * data from before multi-user existed belongs to Guest):
+ *   1. the active user's own store is read first;
+ *   2. a Guest read with an empty store migrates the pre-multiuser `kv`
+ *      store across, then removes the original so "clear data" stays
+ *      permanent and other (new) users never inherit it;
+ *   3. a Guest read with nothing anywhere falls back to the oldest era —
+ *      the pre-IndexedDB localStorage copy.
  */
-import localforage, { type LocalForage } from 'localforage'
+import localforage from 'localforage'
 import type { StateStorage } from 'zustand/middleware'
 import { STORAGE_KEY } from './constants'
+import { GUEST_USER_ID, getActiveUserId } from './active-user'
 
-/** lazy so importing this module never touches IndexedDB during SSR */
-let instance: LocalForage | null = null
-function db(): LocalForage {
-  if (!instance) {
-    instance = localforage.createInstance({ name: 'studypad', storeName: 'kv' })
+/** one localforage instance = one object store in the shared database */
+type LocalForageInstance = ReturnType<typeof localforage.createInstance>
+
+const DB_NAME = 'studypad'
+/** object store holding the pre-multiuser pad (migrated into Guest's partition) */
+const LEGACY_STORE = 'kv'
+
+/** lazy per-user instances so importing this module never touches IndexedDB during SSR */
+const userInstances = new Map<string, LocalForageInstance>()
+function dbFor(userId: string): LocalForageInstance {
+  let inst = userInstances.get(userId)
+  if (!inst) {
+    inst = localforage.createInstance({ name: DB_NAME, storeName: `u-${userId}` })
+    userInstances.set(userId, inst)
   }
-  return instance
+  return inst
+}
+
+let legacyInstance: LocalForageInstance | null = null
+function legacyDb(): LocalForageInstance {
+  if (!legacyInstance) {
+    legacyInstance = localforage.createInstance({ name: DB_NAME, storeName: LEGACY_STORE })
+  }
+  return legacyInstance
+}
+
+/** the partition the storage layer should talk to right now */
+function activeDb(): LocalForage {
+  return dbFor(getActiveUserId())
 }
 
 /**
- * Did the last persisted-state read find saved data (IndexedDB *or* the
- * legacy localStorage copy)? The welcome dialog uses this to tell
+ * Did the last persisted-state read find saved data (the user's partition
+ * *or* a migrated legacy copy)? The welcome dialog uses this to tell
  * returning users apart from genuine first-time visitors — it must be
  * read only after the store has hydrated, when the answer is known.
  */
@@ -38,20 +71,31 @@ export function hasStoredData(): boolean {
 }
 
 async function getItem(name: string): Promise<string | null> {
-  // 1. the data already lives in IndexedDB
-  const current = await db().getItem<string>(name)
+  const userId = getActiveUserId()
+  // 1. the active user's own partition
+  const current = await dbFor(userId).getItem<string>(name)
   if (current != null) {
     lastReadHadData = true
     return current
   }
-  // 2. one-time migration from the pre-IndexedDB localStorage era
-  if (typeof window !== 'undefined') {
-    const legacy = window.localStorage.getItem(name)
-    if (legacy !== null) {
-      await db().setItem(name, legacy) // copy into IndexedDB first…
-      window.localStorage.removeItem(name) // …drop the legacy key only once that worked
+  // 2. one-time migration of the pre-multiuser pad — Guest inherits it
+  if (userId === GUEST_USER_ID) {
+    const legacy = await legacyDb().getItem<string>(name)
+    if (legacy != null) {
+      await dbFor(userId).setItem(name, legacy) // copy into Guest's store first…
+      await legacyDb().removeItem(name) // …drop the original only once that worked
       lastReadHadData = true
       return legacy
+    }
+    // 3. even older era: the pre-IndexedDB localStorage copy
+    if (typeof window !== 'undefined') {
+      const older = window.localStorage.getItem(name)
+      if (older !== null) {
+        await dbFor(userId).setItem(name, older)
+        window.localStorage.removeItem(name)
+        lastReadHadData = true
+        return older
+      }
     }
   }
   lastReadHadData = false
@@ -62,10 +106,10 @@ async function getItem(name: string): Promise<string | null> {
 export const idbStorage: StateStorage = {
   getItem: (name) => getItem(name),
   setItem: async (name, value) => {
-    await db().setItem(name, value)
+    await activeDb().setItem(name, value)
   },
   removeItem: async (name) => {
-    await db().removeItem(name)
+    await activeDb().removeItem(name)
   },
 }
 
@@ -81,7 +125,7 @@ const noopStorage: StateStorage = {
 }
 
 /** factory for createJSONStorage — the server gets the no-op variant, the
- *  browser gets IndexedDB */
+ *  browser gets the per-user IndexedDB storage */
 export function browserStorage(): StateStorage {
   return typeof window === 'undefined' ? noopStorage : idbStorage
 }

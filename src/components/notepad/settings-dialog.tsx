@@ -28,9 +28,11 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
   const font = usePrefsStore((s) => s.font)
   const noteSize = usePrefsStore((s) => s.noteSize)
   const tabMode = usePrefsStore((s) => s.tabMode)
+  const optimiseMultiTabs = usePrefsStore((s) => s.optimiseMultiTabs)
   const setFont = usePrefsStore((s) => s.setFont)
   const setNoteSize = usePrefsStore((s) => s.setNoteSize)
   const setTabMode = usePrefsStore((s) => s.setTabMode)
+  const setOptimiseMultiTabs = usePrefsStore((s) => s.setOptimiseMultiTabs)
   const resetPrefs = usePrefsStore((s) => s.resetPrefs)
 
   return (
@@ -185,6 +187,52 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
               )
             })}
           </div>
+
+          {/* Optimise multi tabs — Yes/No, only meaningful with multiple tabs */}
+          {tabMode === 'multi' && (
+            <div className="mt-3" data-testid="optimise-multi-tabs-control">
+              <p className="text-xs font-medium text-foreground/90">Optimise multi tabs</p>
+              <p className="mt-0.5 text-xs text-muted-foreground/80">
+                Yes mounts only the active tab’s editor and remembers each tab’s scroll
+                position; No keeps every open tab loaded in RAM for the fastest switching.
+              </p>
+              <div
+                className="mt-2 grid grid-cols-2 gap-1 rounded-lg bg-muted p-1"
+                role="radiogroup"
+                aria-label="Optimise multi tabs"
+              >
+                {(
+                  [
+                    { value: true, label: 'Yes', hint: 'One editor mounted — lighter RAM' },
+                    { value: false, label: 'No', hint: 'All tabs loaded — fastest switch' },
+                  ] as { value: boolean; label: string; hint: string }[]
+                ).map((opt) => {
+                  const selected = optimiseMultiTabs === opt.value
+                  return (
+                    <button
+                      key={opt.label}
+                      type="button"
+                      role="radio"
+                      aria-checked={selected}
+                      onClick={() => setOptimiseMultiTabs(opt.value)}
+                      data-testid={`optimise-multi-tabs-${opt.value ? 'yes' : 'no'}`}
+                      className={cn(
+                        'rounded-md px-2 py-1.5 text-xs font-medium transition-colors',
+                        selected
+                          ? 'bg-background shadow-sm'
+                          : 'text-muted-foreground hover:text-foreground',
+                      )}
+                    >
+                      {opt.label}
+                      <span className="mt-0.5 block text-[10px] font-normal text-muted-foreground/80">
+                        {opt.hint}
+                      </span>
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+          )}
         </section>
 
         <DialogFooter className="items-center gap-2 sm:justify-between">

@@ -114,6 +114,23 @@ function normalizeSelection(state: SelectionInput) {
   }
 }
 
+/** bulk import (zip / paste-many): subjects, chapters and notes to append.
+ *  `subjectKey` / `chapterKey` are either `existing:<id>` (an element already
+ *  in the pad) or a key from the sibling arrays (one to create). */
+export interface ImportNotesInput {
+  subjects: { key: string; name: string; color: string }[]
+  chapters: { key: string; subjectKey: string; name: string }[]
+  notes: { chapterKey: string; title: string; content: string }[]
+}
+
+export interface ImportNotesResult {
+  /** caller key → created id */
+  subjectIds: Record<string, string>
+  chapterIds: Record<string, string>
+  /** created notes, in input order */
+  noteIds: string[]
+}
+
 export interface NotepadStore extends SelectionInput {
   searchQuery: string
 
@@ -179,6 +196,12 @@ export interface NotepadStore extends SelectionInput {
   reorderCards: (chapterId: string, orderedIds: string[]) => void
 
   importData: (backup: NotepadBackup) => void
+  /** append imported subjects/chapters/notes in one transaction — unlike
+   *  addNote/addChapter it never changes the selection or opens tabs
+   *  (a 30-note import shouldn't teleport the user or open 30 tabs);
+   *  manually-arranged chapters treat the new notes like addNote does:
+   *  stacked on top, in input order */
+  importNotes: (input: ImportNotesInput) => ImportNotesResult
   clearAll: () => void
 }
 
@@ -744,6 +767,79 @@ export const useNotepadStore = create<NotepadStore>()(
           }
         }),
 
+      importNotes: (input) => {
+        const subjectIds: Record<string, string> = {}
+        const chapterIds: Record<string, string> = {}
+        const noteIds: string[] = []
+
+        set((s) => {
+          const now = Date.now()
+          const newSubjects = input.subjects.map(({ key, name, color }) => {
+            const subject: Subject = { id: uid(), name: name.trim(), color, createdAt: now }
+            subjectIds[key] = subject.id
+            return subject
+          })
+
+          const resolveSubjectId = (subjectKey: string) =>
+            subjectKey.startsWith('existing:')
+              ? subjectKey.slice('existing:'.length)
+              : (subjectIds[subjectKey] ?? '')
+
+          const newChapters = input.chapters.map(({ key, subjectKey, name }) => {
+            const chapter: Chapter = {
+              id: uid(),
+              subjectId: resolveSubjectId(subjectKey),
+              name: name.trim(),
+              createdAt: now,
+            }
+            chapterIds[key] = chapter.id
+            return chapter
+          })
+
+          const resolveChapterId = (chapterKey: string) =>
+            chapterKey.startsWith('existing:')
+              ? chapterKey.slice('existing:'.length)
+              : (chapterIds[chapterKey] ?? '')
+
+          // a manually-arranged chapter keeps its order — imported notes stack
+          // on top (same rule as addNote), first input item highest
+          const minOrder = new Map<string, number>()
+          for (const n of s.notes) {
+            if (n.order === undefined) continue
+            const cur = minOrder.get(n.chapterId)
+            if (cur === undefined || n.order < cur) minOrder.set(n.chapterId, n.order)
+          }
+
+          const newNotes = input.notes.map(({ chapterKey, title, content }) => {
+            const chapterId = resolveChapterId(chapterKey)
+            const note: Note = {
+              id: uid(),
+              chapterId,
+              title: title.trim() || 'Untitled note',
+              content,
+              pinned: false,
+              createdAt: now,
+              updatedAt: now,
+            }
+            const min = minOrder.get(chapterId)
+            if (min !== undefined) {
+              note.order = min - 1
+              minOrder.set(chapterId, min - 1)
+            }
+            noteIds.push(note.id)
+            return note
+          })
+
+          return {
+            subjects: [...s.subjects, ...newSubjects],
+            chapters: [...s.chapters, ...newChapters],
+            notes: [...newNotes, ...s.notes],
+          }
+        })
+
+        return { subjectIds, chapterIds, noteIds }
+      },
+
       clearAll: () =>
         set({
           subjects: [],
@@ -764,6 +860,10 @@ export const useNotepadStore = create<NotepadStore>()(
       name: STORAGE_KEY,
       version: 3,
       storage: createJSONStorage(browserStorage),
+      // multi-user: hydration waits for the user-selection gate — the page
+      // calls persist.rehydrate() right after setActiveUserId(), so the read
+      // lands in the chosen user's partition instead of Guest's by default
+      skipHydration: true,
       // V1 → V2: flashcards didn't exist yet — start every returning user
       // with an empty deck. V2 → V3: quizzes didn't exist yet — same treatment
       // (fresh installs get the seeded demo deck/quiz instead).
@@ -796,6 +896,22 @@ export const useNotepadStore = create<NotepadStore>()(
     },
   ),
 )
+
+/**
+ * Put the pad back on the seeded demo data.
+ *
+ * Multi-user: entered when a user whose partition has never been written
+ * is selected — zustand's rehydrate leaves the previous user's state in
+ * place when the target partition is empty, which would leak one user's
+ * notes into another's workspace (and eventually save them there).
+ */
+export function resetPadToSeeds(): void {
+  useNotepadStore.setState({
+    ...seedState,
+    ...seedSelection,
+    searchQuery: '',
+  })
+}
 
 // ---------- convenience selectors ----------
 

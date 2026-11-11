@@ -66,9 +66,14 @@ interface PrefsState {
   noteSize: NoteSizeId
   /** single = one note at a time (no tab bar); multi = swappable tab bar */
   tabMode: TabMode
+  /** multi-tab optimisation: Yes mounts only the active tab's editor
+   *  (memory-friendly, scroll positions remembered); No keeps every open
+   *  tab's editor alive in RAM for the fastest possible switching */
+  optimiseMultiTabs: boolean
   setFont: (font: FontId) => void
   setNoteSize: (size: NoteSizeId) => void
   setTabMode: (mode: TabMode) => void
+  setOptimiseMultiTabs: (value: boolean) => void
   resetPrefs: () => void
 }
 
@@ -84,10 +89,13 @@ export const usePrefsStore = create<PrefsState>()(
       font: 'default',
       noteSize: 'md',
       tabMode: 'single',
+      optimiseMultiTabs: false,
       setFont: (font) => set({ font }),
       setNoteSize: (noteSize) => set({ noteSize }),
       setTabMode: (tabMode) => set({ tabMode }),
-      resetPrefs: () => set({ font: 'default', noteSize: 'md', tabMode: 'single' }),
+      setOptimiseMultiTabs: (optimiseMultiTabs) => set({ optimiseMultiTabs }),
+      resetPrefs: () =>
+        set({ font: 'default', noteSize: 'md', tabMode: 'single', optimiseMultiTabs: false }),
     }),
     {
       name: 'studypad-prefs-v1',

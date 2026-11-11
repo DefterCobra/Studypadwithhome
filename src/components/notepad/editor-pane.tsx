@@ -62,10 +62,11 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { Separator } from '@/components/ui/separator'
 import { cn } from '@/lib/utils'
-import { useNotepadStore, useSelectedNote } from '@/lib/notepad/store'
+import { useNotepadStore } from '@/lib/notepad/store'
 import type { EditorFocusMode } from '@/lib/notepad/types'
 import { useToast } from '@/hooks/use-toast'
 import { BlockEditor, type BlockEditorHandle } from './block-editor'
+import { rememberScroll, recallScroll } from '@/lib/notepad/scroll-memory'
 import { autoResize } from '@/lib/notepad/blocks'
 import { FORMULA_TEMPLATES, unwrapTemplate, type ImageAction } from './snippets'
 import { Latex } from './markdown-preview'
@@ -73,7 +74,13 @@ import { Whiteboard } from './whiteboard'
 import { FormulaMakerDialog } from './formula-maker/formula-maker-dialog'
 import { LARGE_IMAGE_BYTES, formatBytes, processImageFile } from '@/lib/notepad/image'
 
-interface EditorPaneProps {
+export interface EditorPaneProps {
+  /** pin this pane to one note (multi-tab grid) — defaults to the store's
+   *  selected note, which keeps the classic single-editor behaviour */
+  noteId?: string
+  /** remember + replay this pane's scroll offset across unmounts
+   *  ("Optimise multi tabs: Yes" — see lib/notepad/scroll-memory.ts) */
+  scrollMemory?: boolean
   onBack?: () => void
   onOpenSidebar?: () => void
   onOpenCheatSheet?: () => void
@@ -94,6 +101,8 @@ interface EditorPaneProps {
 }
 
 export function EditorPane({
+  noteId,
+  scrollMemory = false,
   onBack,
   onOpenSidebar,
   onOpenCheatSheet,
@@ -108,7 +117,10 @@ export function EditorPane({
   onToggleToolbarHidden,
   onRevealToolbar,
 }: EditorPaneProps) {
-  const note = useSelectedNote()
+  const note = useNotepadStore((s) => {
+    const id = noteId ?? s.selectedNoteId
+    return id ? (s.notes.find((n) => n.id === id) ?? null) : null
+  })
   const chapters = useNotepadStore((s) => s.chapters)
   const subjects = useNotepadStore((s) => s.subjects)
   const { updateNote, togglePin, deleteNote, addNote } = useNotepadStore()
@@ -116,6 +128,7 @@ export function EditorPane({
   const editorRef = useRef<BlockEditorHandle>(null)
   const titleRef = useRef<HTMLTextAreaElement>(null)
   const imageInputRef = useRef<HTMLInputElement>(null)
+  const bodyRef = useRef<HTMLDivElement>(null)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [whiteboardOpen, setWhiteboardOpen] = useState(false)
   const [whiteboardInitial, setWhiteboardInitial] = useState<string | null>(null)
@@ -135,6 +148,39 @@ export function EditorPane({
     window.addEventListener('resize', onResize)
     return () => window.removeEventListener('resize', onResize)
   }, [])
+
+  // ---------- scroll memory ("Optimise multi tabs: Yes") ----------
+  // the editor unmounts on every tab switch, so the outgoing offset is kept
+  // in a capped map by a passive listener, and the incoming note's saved
+  // offset is replayed before paint (+2 rAF to survive KaTeX / auto-resize
+  // settling). Fresh notes open at the top.
+  const activeNoteId = note?.id ?? null
+  useEffect(() => {
+    if (!scrollMemory || !activeNoteId) return
+    const el = bodyRef.current
+    if (!el) return
+    const onScroll = () => rememberScroll(activeNoteId, el.scrollTop)
+    el.addEventListener('scroll', onScroll, { passive: true })
+    return () => el.removeEventListener('scroll', onScroll)
+  }, [scrollMemory, activeNoteId])
+
+  useLayoutEffect(() => {
+    if (!scrollMemory || !activeNoteId) return
+    const el = bodyRef.current
+    if (!el) return
+    el.scrollTop = recallScroll(activeNoteId) ?? 0
+    let raf1 = 0
+    let raf2 = 0
+    raf1 = requestAnimationFrame(() => {
+      raf2 = requestAnimationFrame(() => {
+        el.scrollTop = recallScroll(activeNoteId) ?? 0
+      })
+    })
+    return () => {
+      cancelAnimationFrame(raf1)
+      cancelAnimationFrame(raf2)
+    }
+  }, [scrollMemory, activeNoteId])
 
   const chapter = note ? chapters.find((c) => c.id === note.chapterId) : null
   const subject = chapter ? subjects.find((s) => s.id === chapter.subjectId) : null
@@ -789,6 +835,7 @@ export function EditorPane({
 
       {/* Body — WYSIWYG block editor */}
       <div
+        ref={bodyRef}
         data-arrange-scroll
         className={cn(
           'min-h-0 flex-1 overflow-y-auto px-4 py-3 md:px-6',

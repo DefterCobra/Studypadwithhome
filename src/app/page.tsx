@@ -1,10 +1,12 @@
 'use client'
 
-import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import {
+  ArchiveRestore,
   BookOpen,
   Database,
   Download,
+  FileArchive,
   FileUp,
   GraduationCap,
   HardDrive,
@@ -35,13 +37,16 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { cn } from '@/lib/utils'
-import { useNotepadStore, useSelectedNote } from '@/lib/notepad/store'
+import { useNotepadStore, useSelectedNote, resetPadToSeeds } from '@/lib/notepad/store'
+import { hasStoredData } from '@/lib/notepad/idb-storage'
+import { setActiveUserId } from '@/lib/notepad/active-user'
+import { allUsers, useUsersStore } from '@/lib/notepad/users'
 import type { EditorFocusMode, MobileView, NotepadBackup } from '@/lib/notepad/types'
 import { useToast } from '@/hooks/use-toast'
 import { useChromeVisibility } from '@/hooks/use-chrome-visibility'
 import { Sidebar } from '@/components/notepad/sidebar'
 import { NotesPane } from '@/components/notepad/notes-pane'
-import { EditorPane } from '@/components/notepad/editor-pane'
+import { MultiEditorPane } from '@/components/notepad/multi-editor-pane'
 import { NoteTabs } from '@/components/notepad/note-tabs'
 import { SideBySideDialog, type SideBySideSelection } from '@/components/notepad/side-by-side-dialog'
 import { SideBySideView } from '@/components/notepad/side-by-side-view'
@@ -53,12 +58,22 @@ import { ThemeToggle } from '@/components/notepad/theme-toggle'
 import { PrintRoot } from '@/components/notepad/print-root'
 import { PrintDialog } from '@/components/notepad/print-dialog'
 import { MdImportDialog } from '@/components/notepad/md-import-dialog'
+import { ExportNotesDialog } from '@/components/notepad/export-notes-dialog'
+import { ImportZipDialog } from '@/components/notepad/import-zip-dialog'
+import { UserGate } from '@/components/notepad/user-gate'
+import { UserMenu } from '@/components/notepad/user-menu'
 import { SettingsDialog } from '@/components/notepad/settings-dialog'
 import { usePrefsStore } from '@/lib/prefs'
 
 const emptySubscribe = () => () => {}
 
-export default function Home() {
+/** localStorage key for the "last used" marker on the user-selection gate */
+const LAST_USER_KEY = 'studypad-last-user-v1'
+
+/** The full notepad workspace for one user. Mounted with key={userId} so
+ *  switching users rebuilds all local UI state on top of the rehydrated
+ *  partition — nothing of the previous user's view can leak through. */
+function NotepadWorkspace({ onSwitchUser }: { onSwitchUser: (userId: string) => void }) {
   // hydration-safe "mounted" flag (false during SSR/hydration, true after)
   const mounted = useSyncExternalStore(
     emptySubscribe,
@@ -71,6 +86,8 @@ export default function Home() {
   const [clearOpen, setClearOpen] = useState(false)
   const [printOpen, setPrintOpen] = useState(false)
   const [mdImportOpen, setMdImportOpen] = useState(false)
+  const [exportZipOpen, setExportZipOpen] = useState(false)
+  const [importZipOpen, setImportZipOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [sideBySideDialogOpen, setSideBySideDialogOpen] = useState(false)
   const [sideBySide, setSideBySide] = useState<SideBySideSelection | null>(null)
@@ -338,6 +355,9 @@ export default function Home() {
               <DropdownMenuItem onClick={handleExport}>
                 <Download className="h-4 w-4" /> Export backup (.json)
               </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setExportZipOpen(true)}>
+                <FileArchive className="h-4 w-4" /> Export notes (.zip)…
+              </DropdownMenuItem>
               <DropdownMenuItem onClick={() => fileInputRef.current?.click()}>
                 <Upload className="h-4 w-4" /> Import backup
               </DropdownMenuItem>
@@ -345,12 +365,25 @@ export default function Home() {
               <DropdownMenuItem onClick={() => setMdImportOpen(true)}>
                 <FileUp className="h-4 w-4" /> Import note (.md)
               </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setImportZipOpen(true)}>
+                <ArchiveRestore className="h-4 w-4" /> Import notes (.zip)…
+              </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem variant="destructive" onClick={() => setClearOpen(true)}>
                 <Trash2 className="h-4 w-4" /> Clear all data
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
+          {/* multi-user: switch or add users — sits right beside the data menu */}
+          <UserMenu
+            onSwitchUser={onSwitchUser}
+            onUserAdded={(name) =>
+              toast({
+                title: 'User added',
+                description: `${name} was created — switch from the user menu anytime.`,
+              })
+            }
+          />
         </div>
         </div>
       </header>
@@ -440,7 +473,7 @@ export default function Home() {
               onExitFocus={exitFocus}
             />
           ) : (
-            <EditorPane
+            <MultiEditorPane
               onBack={() => setMobileView('notes')}
               onOpenSidebar={() => setMobileView('tree')}
               onOpenCheatSheet={() => setCheatOpen(true)}
@@ -490,6 +523,12 @@ export default function Home() {
         onOpenChange={setMdImportOpen}
         onImported={() => setMobileView('editor')}
       />
+      <ExportNotesDialog open={exportZipOpen} onOpenChange={setExportZipOpen} />
+      <ImportZipDialog
+        open={importZipOpen}
+        onOpenChange={setImportZipOpen}
+        onImported={() => setMobileView('editor')}
+      />
 
       <input
         ref={fileInputRef}
@@ -534,4 +573,63 @@ export default function Home() {
       <PrintDialog open={printOpen} onOpenChange={setPrintOpen} />
     </>
   )
+}
+
+/**
+ * Page entry — every load starts at the user-selection gate ("who is
+ * studying today?"). Nothing of the notepad mounts until a user is picked,
+ * so the store only ever hydrates into that user's own data partition.
+ * With no users added yet the gate shows the built-in Guest pad.
+ */
+export default function Home() {
+  const [userId, setUserId] = useState<string | null>(null)
+  const [switchingTo, setSwitchingTo] = useState<string | null>(null)
+  // "last used" marker on the gate — read after mount to stay SSR-safe
+  const [lastUserId, setLastUserId] = useState<string | null>(null)
+  const { toast } = useToast()
+
+  useEffect(() => {
+    try {
+      setLastUserId(window.localStorage.getItem(LAST_USER_KEY))
+    } catch {
+      // cosmetic only
+    }
+  }, [])
+
+  const enterUser = useCallback(
+    async (id: string) => {
+      setSwitchingTo(id)
+      // point the storage layer at the chosen partition before hydrating
+      setActiveUserId(id)
+      useUsersStore.getState().setCurrentUserId(id)
+      try {
+        window.localStorage.setItem(LAST_USER_KEY, id)
+      } catch {
+        // cosmetic only
+      }
+      await useNotepadStore.persist.rehydrate()
+      // rehydrate leaves the previous user's state in place when the target
+      // partition has never been written — reset to the seeded pad instead,
+      // so a new user neither sees nor saves another user's notes
+      if (!hasStoredData()) resetPadToSeeds()
+      const wasSwitching = userId !== null
+      setUserId(id)
+      setSwitchingTo(null)
+      if (wasSwitching) {
+        const name =
+          allUsers(useUsersStore.getState().users).find((u) => u.id === id)?.name ?? 'user'
+        toast({
+          title: `Switched to ${name}`,
+          description: 'Each user keeps their own notepad on this device.',
+        })
+      }
+    },
+    [userId, toast],
+  )
+
+  if (!userId) {
+    return <UserGate onEnter={enterUser} busy={switchingTo} lastUserId={lastUserId} />
+  }
+
+  return <NotepadWorkspace key={userId} onSwitchUser={enterUser} />
 }
