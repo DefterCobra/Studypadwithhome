@@ -70,10 +70,14 @@ interface PrefsState {
    *  (memory-friendly, scroll positions remembered); No keeps every open
    *  tab's editor alive in RAM for the fastest possible switching */
   optimiseMultiTabs: boolean
+  /** Yes: entering the app opens the last-opened note straight away (V9.0
+   *  home screen is skipped); No (default): the home screen comes first */
+  continueFromLastNote: boolean
   setFont: (font: FontId) => void
   setNoteSize: (size: NoteSizeId) => void
   setTabMode: (mode: TabMode) => void
   setOptimiseMultiTabs: (value: boolean) => void
+  setContinueFromLastNote: (value: boolean) => void
   resetPrefs: () => void
 }
 
@@ -90,12 +94,20 @@ export const usePrefsStore = create<PrefsState>()(
       noteSize: 'md',
       tabMode: 'single',
       optimiseMultiTabs: false,
+      continueFromLastNote: false,
       setFont: (font) => set({ font }),
       setNoteSize: (noteSize) => set({ noteSize }),
       setTabMode: (tabMode) => set({ tabMode }),
       setOptimiseMultiTabs: (optimiseMultiTabs) => set({ optimiseMultiTabs }),
+      setContinueFromLastNote: (continueFromLastNote) => set({ continueFromLastNote }),
       resetPrefs: () =>
-        set({ font: 'default', noteSize: 'md', tabMode: 'single', optimiseMultiTabs: false }),
+        set({
+          font: 'default',
+          noteSize: 'md',
+          tabMode: 'single',
+          optimiseMultiTabs: false,
+          continueFromLastNote: false,
+        }),
     }),
     {
       name: 'studypad-prefs-v1',

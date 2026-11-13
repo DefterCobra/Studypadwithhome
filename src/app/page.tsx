@@ -40,7 +40,7 @@ import {
 import { cn } from '@/lib/utils'
 import { useNotepadStore, useSelectedNote, resetPadToSeeds } from '@/lib/notepad/store'
 import { hasStoredData } from '@/lib/notepad/idb-storage'
-import { setLastOpenNote } from '@/lib/notepad/last-note'
+import { getLastOpenNote, setLastOpenNote } from '@/lib/notepad/last-note'
 import { setActiveUserId } from '@/lib/notepad/active-user'
 import { allUsers, useUsersStore, LAST_USER_KEY } from '@/lib/notepad/users'
 import type { EditorFocusMode, MobileView, NotepadBackup } from '@/lib/notepad/types'
@@ -214,6 +214,23 @@ function NotepadWorkspace({
     if (lastOpenNoteId) setLastOpenNote(userId, lastOpenNoteId)
   }, [lastOpenNoteId, userId])
 
+  // Settings → "Continue from last note": Yes skips the home screen and
+  // reopens the last-opened note straight away. Mount-only on purpose —
+  // key={userId} remounts the workspace on every user switch, so each entry
+  // evaluates once (toggling the setting mid-session only applies next entry)
+  useEffect(() => {
+    if (!usePrefsStore.getState().continueFromLastNote) return
+    const savedId = getLastOpenNote(userId)
+    if (!savedId) return
+    const saved = useNotepadStore.getState().notes.find((n) => n.id === savedId)
+    if (!saved) return
+    selectNote(saved.id)
+    setChapterTab('notes')
+    setHomeOpen(false)
+    // selectNote / setChapterTab are stable zustand actions
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId])
+
   // the two notes of the side-by-side view (null once either is deleted)
   const sideLeft = sideBySide ? notes.find((n) => n.id === sideBySide.leftId) ?? null : null
   const sideRight = sideBySide ? notes.find((n) => n.id === sideBySide.rightId) ?? null : null
@@ -305,6 +322,13 @@ function NotepadWorkspace({
     setChapterTab('quiz')
     setQuizMode('attempt') // land in attempt mode, not the question editor
     leaveHome()
+  }
+  // mobile: from the home screen the subjects tree is one tap away —
+  // (desktop keeps the sidebar always visible, the home button is lg-hidden)
+  const openSidebarFromHome = () => {
+    setSideBySide(null)
+    setHomeOpen(false)
+    setMobileView('tree')
   }
 
   // welcome dialog: keep the current (seeded) notes or start from an empty pad
@@ -480,6 +504,7 @@ function NotepadWorkspace({
             onOpenNote={openNoteFromHome}
             onOpenCard={openCardFromHome}
             onOpenQuiz={openQuizFromHome}
+            onOpenSidebar={openSidebarFromHome}
           />
         ) : sideLeft && sideRight ? (
           <SideBySideView

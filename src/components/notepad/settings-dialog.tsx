@@ -29,10 +29,12 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
   const noteSize = usePrefsStore((s) => s.noteSize)
   const tabMode = usePrefsStore((s) => s.tabMode)
   const optimiseMultiTabs = usePrefsStore((s) => s.optimiseMultiTabs)
+  const continueFromLastNote = usePrefsStore((s) => s.continueFromLastNote)
   const setFont = usePrefsStore((s) => s.setFont)
   const setNoteSize = usePrefsStore((s) => s.setNoteSize)
   const setTabMode = usePrefsStore((s) => s.setTabMode)
   const setOptimiseMultiTabs = usePrefsStore((s) => s.setOptimiseMultiTabs)
+  const setContinueFromLastNote = usePrefsStore((s) => s.setContinueFromLastNote)
   const resetPrefs = usePrefsStore((s) => s.resetPrefs)
 
   return (
@@ -233,6 +235,52 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
               </div>
             </div>
           )}
+        </section>
+
+        {/* ---------- Continue from last note ---------- */}
+        <section data-testid="continue-last-note-control">
+          <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+            Continue from last note
+          </p>
+          <p className="mt-0.5 text-xs text-muted-foreground/80">
+            Yes opens your last-opened note right away when you enter; No shows the home
+            screen (&ldquo;Pick up where you left off&rdquo;) first.
+          </p>
+          <div
+            className="mt-2 grid grid-cols-2 gap-1 rounded-lg bg-muted p-1"
+            role="radiogroup"
+            aria-label="Continue from last note"
+          >
+            {(
+              [
+                { value: true, label: 'Yes', hint: 'Open the last note directly' },
+                { value: false, label: 'No', hint: 'Home screen first' },
+              ] as { value: boolean; label: string; hint: string }[]
+            ).map((opt) => {
+              const selected = continueFromLastNote === opt.value
+              return (
+                <button
+                  key={opt.label}
+                  type="button"
+                  role="radio"
+                  aria-checked={selected}
+                  onClick={() => setContinueFromLastNote(opt.value)}
+                  data-testid={`continue-last-note-${opt.value ? 'yes' : 'no'}`}
+                  className={cn(
+                    'rounded-md px-2 py-1.5 text-xs font-medium transition-colors',
+                    selected
+                      ? 'bg-background shadow-sm'
+                      : 'text-muted-foreground hover:text-foreground',
+                  )}
+                >
+                  {opt.label}
+                  <span className="mt-0.5 block text-[10px] font-normal text-muted-foreground/80">
+                    {opt.hint}
+                  </span>
+                </button>
+              )
+            })}
+          </div>
         </section>
 
         <DialogFooter className="items-center gap-2 sm:justify-between">

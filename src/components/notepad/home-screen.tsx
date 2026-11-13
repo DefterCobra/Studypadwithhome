@@ -12,7 +12,7 @@
  * right pane: notes to the editor, cards to deck study, quizzes to attempt.
  */
 import { Children, isValidElement, useEffect, useMemo, useState, type ReactNode } from 'react'
-import { ArrowRight, FileText, Layers, ListChecks, NotebookPen, RefreshCw, Sparkles } from 'lucide-react'
+import { ArrowRight, FileText, Layers, ListChecks, ListTree, NotebookPen, RefreshCw, Sparkles } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { useNotepadStore } from '@/lib/notepad/store'
@@ -61,9 +61,12 @@ interface HomeScreenProps {
   onOpenCard: (cardId: string) => void
   /** open a quiz in attempt mode */
   onOpenQuiz: (quizId: string) => void
+  /** leave home for the workspace with the subjects sidebar in front
+   *  (mobile — on desktop the sidebar is always visible anyway) */
+  onOpenSidebar: () => void
 }
 
-export function HomeScreen({ userId, onOpenNote, onOpenCard, onOpenQuiz }: HomeScreenProps) {
+export function HomeScreen({ userId, onOpenNote, onOpenCard, onOpenQuiz, onOpenSidebar }: HomeScreenProps) {
   const notes = useNotepadStore((s) => s.notes)
   const flashcards = useNotepadStore((s) => s.flashcards)
   const quizzes = useNotepadStore((s) => s.quizzes)
@@ -126,6 +129,17 @@ export function HomeScreen({ userId, onOpenNote, onOpenCard, onOpenQuiz }: HomeS
           <h1 className="text-2xl font-extrabold uppercase tracking-tight sm:text-3xl">
             Pick up where you left off
           </h1>
+          {/* mobile only — the subjects sidebar is otherwise unreachable from home */}
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-8 gap-1.5 lg:hidden"
+            data-testid="home-sidebar"
+            aria-label="Browse subjects — open the sidebar"
+            onClick={onOpenSidebar}
+          >
+            <ListTree className="h-4 w-4" aria-hidden /> Subjects
+          </Button>
           <Button
             variant="ghost"
             size="sm"
