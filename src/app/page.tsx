@@ -10,6 +10,7 @@ import {
   FileUp,
   GraduationCap,
   HardDrive,
+  House,
   Pin,
   PinOff,
   SlidersHorizontal,
@@ -39,6 +40,7 @@ import {
 import { cn } from '@/lib/utils'
 import { useNotepadStore, useSelectedNote, resetPadToSeeds } from '@/lib/notepad/store'
 import { hasStoredData } from '@/lib/notepad/idb-storage'
+import { setLastOpenNote } from '@/lib/notepad/last-note'
 import { setActiveUserId } from '@/lib/notepad/active-user'
 import { allUsers, useUsersStore, LAST_USER_KEY } from '@/lib/notepad/users'
 import type { EditorFocusMode, MobileView, NotepadBackup } from '@/lib/notepad/types'
@@ -62,6 +64,7 @@ import { ExportNotesDialog } from '@/components/notepad/export-notes-dialog'
 import { ImportZipDialog } from '@/components/notepad/import-zip-dialog'
 import { UserGate } from '@/components/notepad/user-gate'
 import { UserMenu } from '@/components/notepad/user-menu'
+import { HomeScreen } from '@/components/notepad/home-screen'
 import { SettingsDialog } from '@/components/notepad/settings-dialog'
 import { usePrefsStore } from '@/lib/prefs'
 
@@ -71,9 +74,12 @@ const emptySubscribe = () => () => {}
  *  switching users rebuilds all local UI state on top of the rehydrated
  *  partition — nothing of the previous user's view can leak through. */
 function NotepadWorkspace({
+  userId,
   onSwitchUser,
   onUserDeleted,
 }: {
+  /** the user this workspace belongs to (drives per-user home-screen markers) */
+  userId: string
   onSwitchUser: (userId: string) => void
   /** a profile was removed in Manage users — back to the gate if it was this one */
   onUserDeleted: (userId: string, name: string) => void
@@ -96,6 +102,9 @@ function NotepadWorkspace({
   const [sideBySideDialogOpen, setSideBySideDialogOpen] = useState(false)
   const [sideBySide, setSideBySide] = useState<SideBySideSelection | null>(null)
   const [focusMode, setFocusMode] = useState<EditorFocusMode>('off')
+  // V9.0 home screen — every entry lands on "Pick up where you left off";
+  // opening anything from there swaps back into the workspace view
+  const [homeOpen, setHomeOpen] = useState(true)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const mainRef = useRef<HTMLElement | null>(null)
   const selectedNote = useSelectedNote()
@@ -191,6 +200,19 @@ function NotepadWorkspace({
   const flashcards = useNotepadStore((s) => s.flashcards)
   const quizzes = useNotepadStore((s) => s.quizzes)
   const chapterTab = useNotepadStore((s) => s.chapterTab)
+  const selectNote = useNotepadStore((s) => s.selectNote)
+  const selectCard = useNotepadStore((s) => s.selectCard)
+  const selectQuiz = useNotepadStore((s) => s.selectQuiz)
+  const setChapterTab = useNotepadStore((s) => s.setChapterTab)
+  const setFlashcardMode = useNotepadStore((s) => s.setFlashcardMode)
+  const setQuizMode = useNotepadStore((s) => s.setQuizMode)
+
+  // "Pick up where you left off" — remember which note is open, per user
+  // (read by the home screen; a plain best-effort marker, never blocking)
+  const lastOpenNoteId = selectedNote?.id ?? null
+  useEffect(() => {
+    if (lastOpenNoteId) setLastOpenNote(userId, lastOpenNoteId)
+  }, [lastOpenNoteId, userId])
 
   // the two notes of the side-by-side view (null once either is deleted)
   const sideLeft = sideBySide ? notes.find((n) => n.id === sideBySide.leftId) ?? null : null
@@ -261,6 +283,30 @@ function NotepadWorkspace({
     }
   }
 
+  // ---------- home screen (V9.0): jump from a pick straight into its pane ----------
+  const leaveHome = () => {
+    setSideBySide(null)
+    setHomeOpen(false)
+    setMobileView('editor')
+  }
+  const openNoteFromHome = (noteId: string) => {
+    selectNote(noteId)
+    setChapterTab('notes')
+    leaveHome()
+  }
+  const openCardFromHome = (cardId: string) => {
+    selectCard(cardId)
+    setChapterTab('flashcards')
+    setFlashcardMode('view') // land in study mode, not the card builder
+    leaveHome()
+  }
+  const openQuizFromHome = (quizId: string) => {
+    selectQuiz(quizId)
+    setChapterTab('quiz')
+    setQuizMode('attempt') // land in attempt mode, not the question editor
+    leaveHome()
+  }
+
   // welcome dialog: keep the current (seeded) notes or start from an empty pad
   const handleWelcomeChoice = (choice: WelcomeChoice, returning: boolean) => {
     if (choice === 'fresh') {
@@ -321,6 +367,18 @@ function NotepadWorkspace({
         </Badge>
 
         <div className="ml-auto flex items-center gap-1.5">
+          {/* V9.0 home screen — one click back to "Pick up where you left off" */}
+          <Button
+            variant={homeOpen ? 'secondary' : 'ghost'}
+            size="icon"
+            className="h-8 w-8"
+            aria-label={homeOpen ? 'Home screen — you are here' : 'Go to the home screen'}
+            title="Home"
+            data-testid="home-button"
+            onClick={() => setHomeOpen(true)}
+          >
+            <House className="h-4 w-4" />
+          </Button>
           <Button
             variant="ghost"
             size="icon"
@@ -402,7 +460,8 @@ function NotepadWorkspace({
 
       {/* Note tabs — swappable open notes (Settings → Note tabs → Multiple);
           hidden with the rest of the chrome in focus mode */}
-      {!focusActive && tabMode === 'multi' && openNoteIds.length > 0 && (
+      {/* home screen keeps the chrome minimal — the open-tabs bar stays hidden */}
+      {!focusActive && !homeOpen && tabMode === 'multi' && openNoteIds.length > 0 && (
         <NoteTabs
           onOpenNote={() => {
             setSideBySide(null)
@@ -415,7 +474,14 @@ function NotepadWorkspace({
       {/* Panes — side-by-side replaces everything with two full-width panes;
           in focus mode only the editor remains */}
       <main ref={mainRef} className="flex min-h-0 flex-1">
-        {sideLeft && sideRight ? (
+        {homeOpen ? (
+          <HomeScreen
+            userId={userId}
+            onOpenNote={openNoteFromHome}
+            onOpenCard={openCardFromHome}
+            onOpenQuiz={openQuizFromHome}
+          />
+        ) : sideLeft && sideRight ? (
           <SideBySideView
             left={sideLeft}
             right={sideRight}
@@ -663,5 +729,12 @@ export default function Home() {
     return <UserGate onEnter={enterUser} busy={switchingTo} lastUserId={lastUserId} />
   }
 
-  return <NotepadWorkspace key={userId} onSwitchUser={enterUser} onUserDeleted={handleUserDeleted} />
+  return (
+    <NotepadWorkspace
+      key={userId}
+      userId={userId}
+      onSwitchUser={enterUser}
+      onUserDeleted={handleUserDeleted}
+    />
+  )
 }

@@ -18,6 +18,7 @@ import { create } from 'zustand'
 import { GUEST_USER_ID } from './active-user'
 import { SUBJECT_COLORS } from './constants'
 import { clearUserPartition } from './idb-storage'
+import { clearLastOpenNote } from './last-note'
 
 export interface PadUser {
   id: string
@@ -164,6 +165,7 @@ export const useUsersStore = create<UsersState>()((set, get) => ({
     } catch {
       // cosmetic only
     }
+    clearLastOpenNote(id)
     try {
       if (window.localStorage.getItem(LAST_USER_KEY) === id) {
         window.localStorage.removeItem(LAST_USER_KEY)
