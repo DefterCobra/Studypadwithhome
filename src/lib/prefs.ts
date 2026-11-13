@@ -6,12 +6,19 @@
  * to localStorage synchronously so the tiny boot script in layout.tsx can
  * apply them before first paint (no font flash on reload).
  */
+import { useState } from 'react'
 import { create } from 'zustand'
 import { createJSONStorage, persist } from 'zustand/middleware'
 
 export type FontId = 'default' | 'literata' | 'lora' | 'merriweather' | 'source-serif'
 export type NoteSizeId = 'sm' | 'md' | 'lg' | 'xl'
 export type TabMode = 'single' | 'multi'
+
+/** performance mode: Auto detects the device, Yes forces the light mode,
+ *  No turns everything off for instant full-list access */
+export type PerfMode = 'auto' | 'yes' | 'no'
+/** how many notes the home screen's all-notes list loads per batch */
+export type HomeBatch = 10 | 20
 
 export interface FontOption {
   id: FontId
@@ -73,12 +80,69 @@ interface PrefsState {
   /** Yes: entering the app opens the last-opened note straight away (V9.0
    *  home screen is skipped); No (default): the home screen comes first */
   continueFromLastNote: boolean
+  /** V10 performance mode (default Auto): phones / tablets / ~2 GB devices get
+   *  the light mode automatically — batched home list + single-editor tabs */
+  perfMode: PerfMode
+  /** Yes (default): the home screen shows the searchable all-notes list under
+   *  the top-5 picks; No keeps the home screen minimal (fastest render) */
+  homeShowAllNotes: boolean
+  /** batch size for the home all-notes list while optimising (default 10) */
+  homeBatch: HomeBatch
   setFont: (font: FontId) => void
   setNoteSize: (size: NoteSizeId) => void
   setTabMode: (mode: TabMode) => void
   setOptimiseMultiTabs: (value: boolean) => void
   setContinueFromLastNote: (value: boolean) => void
+  setPerfMode: (mode: PerfMode) => void
+  setHomeShowAllNotes: (value: boolean) => void
+  setHomeBatch: (size: HomeBatch) => void
   resetPrefs: () => void
+}
+
+/**
+ * Best-effort "this device probably has little RAM" probe (V10).
+ *
+ * Signals, strongest first:
+ * - Device Memory API (`navigator.deviceMemory`, Chrome/Android): ~2 GB or less
+ * - Data Saver on (`navigator.connection.saveData`)
+ * - A classic phone/tablet UA string (iPhone, iPad, Android, Mobile, Tablet…)
+ * - Touch input + a small viewport (iPads, which report a desktop UA)
+ *
+ * Desktops and laptops (desktop UA, no touch, no low-RAM report) stay
+ * unoptimised so the home screen renders every note at once — the fastest
+ * possible access. iPad Pro's 12.9" (Macintosh UA, big viewport, no RAM
+ * report) is the one deliberate miss: it ships with 4-6 GB anyway.
+ */
+export function deviceLooksLowMemory(): boolean {
+  if (typeof navigator === 'undefined') return false
+  const nav = navigator as Navigator & {
+    deviceMemory?: number
+    connection?: { saveData?: boolean }
+  }
+  if (typeof nav.deviceMemory === 'number' && nav.deviceMemory > 0 && nav.deviceMemory <= 2) return true
+  if (nav.connection?.saveData) return true
+  // phones & tablets — on real hardware touch always accompanies these UAs,
+  // so the UA match alone is a reliable form-factor signal
+  if (/Android|iPhone|iPad|iPod|Mobile|Tablet|Silk|PlayBook/i.test(nav.userAgent ?? '')) return true
+  const touch = nav.maxTouchPoints > 0
+  if (touch && typeof window !== 'undefined' && Math.min(window.innerWidth, window.innerHeight) < 820) {
+    return true
+  }
+  return false
+}
+
+/**
+ * Effective "optimise for this device" flag: Yes forces it on, No forces it
+ * off, Auto applies the device detection above. Consumers: the home screen's
+ * batched all-notes list and the multi-tab single-editor mounting.
+ */
+export function useLowMemoryMode(): boolean {
+  const perfMode = usePrefsStore((s) => s.perfMode)
+  // resolved once per mount — the device form factor never changes mid-session
+  const [detected] = useState(() => deviceLooksLowMemory())
+  if (perfMode === 'yes') return true
+  if (perfMode === 'no') return false
+  return detected
 }
 
 /** SSR-safe storage: the server render never touches localStorage */
@@ -95,11 +159,17 @@ export const usePrefsStore = create<PrefsState>()(
       tabMode: 'single',
       optimiseMultiTabs: false,
       continueFromLastNote: false,
+      perfMode: 'auto',
+      homeShowAllNotes: true,
+      homeBatch: 10,
       setFont: (font) => set({ font }),
       setNoteSize: (noteSize) => set({ noteSize }),
       setTabMode: (tabMode) => set({ tabMode }),
       setOptimiseMultiTabs: (optimiseMultiTabs) => set({ optimiseMultiTabs }),
       setContinueFromLastNote: (continueFromLastNote) => set({ continueFromLastNote }),
+      setPerfMode: (perfMode) => set({ perfMode }),
+      setHomeShowAllNotes: (homeShowAllNotes) => set({ homeShowAllNotes }),
+      setHomeBatch: (homeBatch) => set({ homeBatch }),
       resetPrefs: () =>
         set({
           font: 'default',
@@ -107,6 +177,9 @@ export const usePrefsStore = create<PrefsState>()(
           tabMode: 'single',
           optimiseMultiTabs: false,
           continueFromLastNote: false,
+          perfMode: 'auto',
+          homeShowAllNotes: true,
+          homeBatch: 10,
         }),
     }),
     {

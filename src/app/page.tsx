@@ -330,6 +330,13 @@ function NotepadWorkspace({
     setHomeOpen(false)
     setMobileView('tree')
   }
+  // V10 "View notes" — leave the home screen without opening anything;
+  // mobile lands on the notes list, desktop shows the workspace as-is
+  const openWorkspaceFromHome = () => {
+    setSideBySide(null)
+    setHomeOpen(false)
+    setMobileView('notes')
+  }
 
   // welcome dialog: keep the current (seeded) notes or start from an empty pad
   const handleWelcomeChoice = (choice: WelcomeChoice, returning: boolean) => {
@@ -505,6 +512,7 @@ function NotepadWorkspace({
             onOpenCard={openCardFromHome}
             onOpenQuiz={openQuizFromHome}
             onOpenSidebar={openSidebarFromHome}
+            onOpenWorkspace={openWorkspaceFromHome}
           />
         ) : sideLeft && sideRight ? (
           <SideBySideView

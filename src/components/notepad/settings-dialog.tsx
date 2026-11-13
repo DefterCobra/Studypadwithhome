@@ -11,7 +11,7 @@ import {
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
-import { FONT_OPTIONS, SIZE_OPTIONS, usePrefsStore, type FontOption, type TabMode } from '@/lib/prefs'
+import { FONT_OPTIONS, SIZE_OPTIONS, usePrefsStore, useLowMemoryMode, type FontOption, type TabMode, type PerfMode, type HomeBatch } from '@/lib/prefs'
 
 /** inline style so each picker row previews its own family */
 const familyStyle = (opt: FontOption) =>
@@ -30,12 +30,20 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
   const tabMode = usePrefsStore((s) => s.tabMode)
   const optimiseMultiTabs = usePrefsStore((s) => s.optimiseMultiTabs)
   const continueFromLastNote = usePrefsStore((s) => s.continueFromLastNote)
+  const perfMode = usePrefsStore((s) => s.perfMode)
+  const homeShowAllNotes = usePrefsStore((s) => s.homeShowAllNotes)
+  const homeBatch = usePrefsStore((s) => s.homeBatch)
   const setFont = usePrefsStore((s) => s.setFont)
   const setNoteSize = usePrefsStore((s) => s.setNoteSize)
   const setTabMode = usePrefsStore((s) => s.setTabMode)
   const setOptimiseMultiTabs = usePrefsStore((s) => s.setOptimiseMultiTabs)
   const setContinueFromLastNote = usePrefsStore((s) => s.setContinueFromLastNote)
+  const setPerfMode = usePrefsStore((s) => s.setPerfMode)
+  const setHomeShowAllNotes = usePrefsStore((s) => s.setHomeShowAllNotes)
+  const setHomeBatch = usePrefsStore((s) => s.setHomeBatch)
   const resetPrefs = usePrefsStore((s) => s.resetPrefs)
+  // the effective V10 optimisation state — Auto resolves against the device
+  const lowMemory = useLowMemoryMode()
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -233,6 +241,12 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
                   )
                 })}
               </div>
+              {/* V10 — the performance mode can force this on automatically */}
+              {lowMemory && !optimiseMultiTabs && (
+                <p className="mt-1.5 text-[11px] text-emerald-600" data-testid="optimise-multi-tabs-auto">
+                  Auto-enabled right now — Performance is optimising this device.
+                </p>
+              )}
             </div>
           )}
         </section>
@@ -266,6 +280,150 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
                   aria-checked={selected}
                   onClick={() => setContinueFromLastNote(opt.value)}
                   data-testid={`continue-last-note-${opt.value ? 'yes' : 'no'}`}
+                  className={cn(
+                    'rounded-md px-2 py-1.5 text-xs font-medium transition-colors',
+                    selected
+                      ? 'bg-background shadow-sm'
+                      : 'text-muted-foreground hover:text-foreground',
+                  )}
+                >
+                  {opt.label}
+                  <span className="mt-0.5 block text-[10px] font-normal text-muted-foreground/80">
+                    {opt.hint}
+                  </span>
+                </button>
+              )
+            })}
+          </div>
+        </section>
+
+        {/* ---------- Performance (V10) ---------- */}
+        <section data-testid="performance-control">
+          <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+            Performance
+          </p>
+          <p className="mt-0.5 text-xs text-muted-foreground/80">
+            Light mode for phones, tablets and ~2&nbsp;GB devices: the home all-notes list
+            loads in batches and, with multiple tabs, only one editor stays in RAM.
+          </p>
+          <div
+            className="mt-2 grid grid-cols-3 gap-1 rounded-lg bg-muted p-1"
+            role="radiogroup"
+            aria-label="Performance mode"
+          >
+            {(
+              [
+                { id: 'auto', label: 'Auto', hint: 'Detect this device' },
+                { id: 'yes', label: 'Yes', hint: 'Always optimise' },
+                { id: 'no', label: 'No', hint: 'Full lists, fastest access' },
+              ] as { id: PerfMode; label: string; hint: string }[]
+            ).map((opt) => {
+              const selected = perfMode === opt.id
+              return (
+                <button
+                  key={opt.id}
+                  type="button"
+                  role="radio"
+                  aria-checked={selected}
+                  onClick={() => setPerfMode(opt.id)}
+                  data-testid={`perf-mode-${opt.id}`}
+                  className={cn(
+                    'rounded-md px-1.5 py-1.5 text-xs font-medium transition-colors',
+                    selected
+                      ? 'bg-background shadow-sm'
+                      : 'text-muted-foreground hover:text-foreground',
+                  )}
+                >
+                  {opt.label}
+                  <span className="mt-0.5 block text-[10px] font-normal leading-tight text-muted-foreground/80">
+                    {opt.hint}
+                  </span>
+                </button>
+              )
+            })}
+          </div>
+          <p className="mt-1.5 text-[11px] text-muted-foreground/80" data-testid="perf-effective">
+            {lowMemory
+              ? 'Optimisations are active on this device right now.'
+              : 'Optimisations are off — everything loads at once, fastest access.'}
+          </p>
+        </section>
+
+        {/* ---------- Show all notes on home (V10) ---------- */}
+        <section data-testid="home-show-all-notes-control">
+          <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+            Show all notes on home
+          </p>
+          <p className="mt-0.5 text-xs text-muted-foreground/80">
+            Yes adds a searchable list of every note under the top-5 picks (scroll to load
+            more); No keeps the home screen minimal.
+          </p>
+          <div
+            className="mt-2 grid grid-cols-2 gap-1 rounded-lg bg-muted p-1"
+            role="radiogroup"
+            aria-label="Show all notes on home"
+          >
+            {(
+              [
+                { value: true, label: 'Yes', hint: 'Searchable all-notes list' },
+                { value: false, label: 'No', hint: 'Just the top-5 picks' },
+              ] as { value: boolean; label: string; hint: string }[]
+            ).map((opt) => {
+              const selected = homeShowAllNotes === opt.value
+              return (
+                <button
+                  key={opt.label}
+                  type="button"
+                  role="radio"
+                  aria-checked={selected}
+                  onClick={() => setHomeShowAllNotes(opt.value)}
+                  data-testid={`home-show-all-notes-${opt.value ? 'yes' : 'no'}`}
+                  className={cn(
+                    'rounded-md px-2 py-1.5 text-xs font-medium transition-colors',
+                    selected
+                      ? 'bg-background shadow-sm'
+                      : 'text-muted-foreground hover:text-foreground',
+                  )}
+                >
+                  {opt.label}
+                  <span className="mt-0.5 block text-[10px] font-normal text-muted-foreground/80">
+                    {opt.hint}
+                  </span>
+                </button>
+              )
+            })}
+          </div>
+        </section>
+
+        {/* ---------- Home notes per batch (V10) ---------- */}
+        <section data-testid="home-batch-control">
+          <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+            Home notes per batch
+          </p>
+          <p className="mt-0.5 text-xs text-muted-foreground/80">
+            While optimising, the home all-notes list mounts this many notes at a time and
+            loads more as you scroll. Optimisations off shows the whole list at once.
+          </p>
+          <div
+            className="mt-2 grid grid-cols-2 gap-1 rounded-lg bg-muted p-1"
+            role="radiogroup"
+            aria-label="Home notes per batch"
+          >
+            {(
+              [
+                { value: 10, label: '10', hint: 'Lightest on RAM' },
+                { value: 20, label: '20', hint: 'Fewer loads while scrolling' },
+              ] as { value: HomeBatch; label: string; hint: string }[]
+            ).map((opt) => {
+              const selected = homeBatch === opt.value
+              return (
+                <button
+                  key={opt.label}
+                  type="button"
+                  role="radio"
+                  aria-checked={selected}
+                  onClick={() => setHomeBatch(opt.value)}
+                  data-testid={`home-batch-${opt.value}`}
                   className={cn(
                     'rounded-md px-2 py-1.5 text-xs font-medium transition-colors',
                     selected

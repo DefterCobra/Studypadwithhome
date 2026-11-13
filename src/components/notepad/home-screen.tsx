@@ -1,24 +1,32 @@
 'use client'
 
 /**
- * Home screen (V9.0) — "Pick up where you left off".
+ * Home screen (V9.0, expanded in V10) — "Pick up where you left off".
  *
  * Every entry into a workspace lands here instead of dropping straight into
  * the editor: a hero card offers the last-opened note (per-user marker, see
- * last-note.ts) with a one-click Open, and three sections surface five
- * random flashcards, quizzes and notes from the whole pad as quick ways
- * back into studying. Opening anything swaps to the workspace view (the
- * multi-tab bar is hidden while the home screen is up) and jumps to the
- * right pane: notes to the editor, cards to deck study, quizzes to attempt.
+ * last-note.ts) with a one-click Open, a View-notes button swaps to the
+ * workspace, and three sections surface five random flashcards, quizzes and
+ * notes from the whole pad as quick ways back into studying. Opening anything
+ * swaps to the workspace view (the multi-tab bar is hidden while the home
+ * screen is up) and jumps to the right pane: notes to the editor, cards to
+ * deck study, quizzes to attempt.
+ *
+ * V10 adds the searchable all-notes list under the picks (Settings → Show all
+ * notes). On low-memory devices it mounts in small batches fed by an
+ * IntersectionObserver sentinel, so a 2 GB tablet never renders the whole pad
+ * at once; with optimisation off every note renders immediately.
  */
-import { Children, isValidElement, useEffect, useMemo, useState, type ReactNode } from 'react'
-import { ArrowRight, FileText, Layers, ListChecks, ListTree, NotebookPen, RefreshCw, Sparkles } from 'lucide-react'
+import { useCallback, Children, useEffect, useMemo, useRef, useState, isValidElement, type ReactNode } from 'react'
+import { ArrowRight, BookOpen, ChevronDown, FileStack, FileText, Layers, ListChecks, ListTree, NotebookPen, RefreshCw, Search, Sparkles } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { useNotepadStore } from '@/lib/notepad/store'
+import { Input } from '@/components/ui/input'
+import { useNotepadStore, sortNotes } from '@/lib/notepad/store'
 import { makeExcerpt } from '@/lib/notepad/constants'
 import { getLastOpenNote } from '@/lib/notepad/last-note'
 import { allUsers, useUsersStore } from '@/lib/notepad/users'
+import { usePrefsStore, useLowMemoryMode } from '@/lib/prefs'
 import type { Note } from '@/lib/notepad/types'
 
 /** how many random items each section offers */
@@ -64,9 +72,18 @@ interface HomeScreenProps {
   /** leave home for the workspace with the subjects sidebar in front
    *  (mobile — on desktop the sidebar is always visible anyway) */
   onOpenSidebar: () => void
+  /** leave home for the workspace without opening anything (View notes) */
+  onOpenWorkspace: () => void
 }
 
-export function HomeScreen({ userId, onOpenNote, onOpenCard, onOpenQuiz, onOpenSidebar }: HomeScreenProps) {
+export function HomeScreen({
+  userId,
+  onOpenNote,
+  onOpenCard,
+  onOpenQuiz,
+  onOpenSidebar,
+  onOpenWorkspace,
+}: HomeScreenProps) {
   const notes = useNotepadStore((s) => s.notes)
   const flashcards = useNotepadStore((s) => s.flashcards)
   const quizzes = useNotepadStore((s) => s.quizzes)
@@ -113,6 +130,13 @@ export function HomeScreen({ userId, onOpenNote, onOpenCard, onOpenQuiz, onOpenS
   }, [notes])
   const pickupNote = resumeNote ?? latestNote
   const pickupContext = pickupNote ? contextFor(pickupNote.chapterId) : null
+
+  // V10 performance: the all-notes list batches itself only while the
+  // low-memory mode is active — otherwise it renders everything at once
+  const lowMemory = useLowMemoryMode()
+  const homeShowAllNotes = usePrefsStore((s) => s.homeShowAllNotes)
+  const homeBatch = usePrefsStore((s) => s.homeBatch)
+  const allNotesBatch = lowMemory ? homeBatch : 0
 
   return (
     <div
@@ -190,6 +214,24 @@ export function HomeScreen({ userId, onOpenNote, onOpenCard, onOpenQuiz, onOpenS
           </p>
         )}
 
+        {/* V10 — one tap from the hero into the workspace (mobile lands on the
+            notes list, desktop just swaps the home screen away) */}
+        <div className="mt-4 flex flex-wrap items-center gap-x-3 gap-y-2">
+          <Button
+            type="button"
+            data-testid="home-view-notes"
+            onClick={onOpenWorkspace}
+            className="h-9 w-full gap-2 sm:w-auto"
+          >
+            <BookOpen className="h-4 w-4" aria-hidden /> View notes
+          </Button>
+          <p className="text-xs text-muted-foreground">
+            {notes.length > 0
+              ? `Enter the workspace — all ${notes.length} notes by subject`
+              : 'Enter the workspace — pick a subject to begin'}
+          </p>
+        </div>
+
         <div className="mt-6 grid gap-5 lg:grid-cols-3">
           <HomeSection
             title="Flashcards"
@@ -249,8 +291,185 @@ export function HomeScreen({ userId, onOpenNote, onOpenCard, onOpenQuiz, onOpenS
             ))}
           </HomeSection>
         </div>
+
+        {/* V10 — everything on the pad: search + infinite scroll. Hidden by
+            the setting, skipped on an empty pad. */}
+        {homeShowAllNotes && notes.length > 0 && (
+          <AllNotesSection
+            notes={notes}
+            batch={allNotesBatch}
+            contextFor={contextFor}
+            onOpenNote={onOpenNote}
+          />
+        )}
       </div>
     </div>
+  )
+}
+
+/**
+ * V10 — searchable, infinitely scrolling list of every note on the pad.
+ *
+ * Memory-conscious: while the low-memory mode is active the list mounts in
+ * small batches (Settings → Performance → 10/20) and an IntersectionObserver
+ * on a bottom sentinel pulls in the next batch before the user reaches it —
+ * a 2 GB tablet never renders hundreds of rows at once. With optimisation
+ * off (batch = 0) the whole list mounts immediately, the fastest access.
+ * Ordering and matching mirror the workspace notes list (sortNotes, title +
+ * content search).
+ */
+function AllNotesSection({
+  notes,
+  batch,
+  contextFor,
+  onOpenNote,
+}: {
+  notes: Note[]
+  /** rows per batch; 0 = no batching, render everything at once */
+  batch: number
+  contextFor: (chapterId: string) => PickContext
+  onOpenNote: (noteId: string) => void
+}) {
+  const [query, setQuery] = useState('')
+  // how many batches have been pulled in; rows = batch * pulled (batch = 0
+  // means no batching — everything renders at once). Both resets are
+  // event-driven, so no effect churn while typing or scrolling.
+  const [pulled, setPulled] = useState(1)
+  const sentinelRef = useRef<HTMLDivElement | null>(null)
+
+  // same ordering + matching as the workspace notes list (notes-pane.tsx)
+  const filtered = useMemo(() => {
+    const pool = sortNotes(notes)
+    const q = query.trim().toLowerCase()
+    if (!q) return pool
+    return pool.filter(
+      (n) => n.title.toLowerCase().includes(q) || n.content.toLowerCase().includes(q),
+    )
+  }, [notes, query])
+
+  const setQueryAndRestart = (value: string) => {
+    setQuery(value)
+    setPulled(1) // a new search starts from the first batch
+  }
+
+  const loadMore = useCallback(() => setPulled((p) => p + 1), [])
+
+  // infinite scroll — the sentinel sits at the very bottom and pre-fetches
+  // the next batch while it is still ~600px below the viewport
+  const visible = batch === 0 ? null : Math.min(batch * pulled, filtered.length)
+  const hasMore = visible !== null && visible < filtered.length
+  useEffect(() => {
+    if (!hasMore) return
+    const el = sentinelRef.current
+    if (!el || typeof IntersectionObserver === 'undefined') return
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) loadMore()
+      },
+      { rootMargin: '600px 0px' },
+    )
+    io.observe(el)
+    return () => io.disconnect()
+  }, [hasMore, loadMore])
+
+  const shown = visible === null ? filtered : filtered.slice(0, visible)
+
+  return (
+    <section
+      className="mt-8"
+      data-testid="home-all-notes"
+      aria-label={`All notes — ${notes.length} total`}
+    >
+      <div className="mb-2 flex flex-wrap items-center gap-2 px-0.5">
+        <span className="flex h-6 w-6 items-center justify-center rounded-md bg-muted text-muted-foreground">
+          <FileStack className="h-3.5 w-3.5" aria-hidden />
+        </span>
+        <h2 className="text-sm font-bold uppercase tracking-wide">All notes</h2>
+        <Badge variant="secondary" className="px-1.5 text-[11px] tabular-nums">
+          {notes.length}
+        </Badge>
+        <div className="relative ml-auto w-full sm:w-64">
+          <Search
+            className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground"
+            aria-hidden
+          />
+          <Input
+            value={query}
+            onChange={(e) => setQueryAndRestart(e.target.value)}
+            placeholder="Search all notes…"
+            aria-label="Search all notes"
+            data-testid="home-notes-search"
+            type="search"
+            className="h-9 pl-8"
+          />
+        </div>
+      </div>
+
+      {shown.length > 0 ? (
+        <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+          {shown.map((note) => (
+            <AllNotesRow
+              key={note.id}
+              note={note}
+              context={contextFor(note.chapterId)}
+              onOpenNote={onOpenNote}
+            />
+          ))}
+        </div>
+      ) : (
+        <p
+          className="rounded-xl border border-dashed bg-card/50 px-3 py-3 text-xs text-muted-foreground"
+          data-testid="home-all-empty"
+        >
+          No note matches “{query}”.
+        </p>
+      )}
+
+      {/* progress line + an explicit button so the next batch is one click
+          away even when the observer hasn't fired yet */}
+      <div className="mt-2 flex items-center gap-2 px-0.5">
+        <p className="text-[11px] text-muted-foreground" data-testid="home-all-progress">
+          {batch === 0 ? `Showing all ${shown.length}` : `Showing ${shown.length} of ${filtered.length}`}
+        </p>
+        {hasMore && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 gap-1 text-muted-foreground"
+            data-testid="home-all-more"
+            onClick={loadMore}
+          >
+            Load more <ChevronDown className="h-3.5 w-3.5" aria-hidden />
+          </Button>
+        )}
+      </div>
+      {hasMore && <div ref={sentinelRef} aria-hidden className="h-1" />}
+    </section>
+  )
+}
+
+/** one row of the all-notes list — the markdown excerpt parse is memoised
+ *  per note, so batching rows in stays cheap even for large notes */
+function AllNotesRow({
+  note,
+  context,
+  onOpenNote,
+}: {
+  note: Note
+  context: PickContext
+  onOpenNote: (noteId: string) => void
+}) {
+  const sub = useMemo(() => makeExcerpt(note.content, 64), [note.content])
+  const time = useMemo(() => timeAgo(note.updatedAt), [note.updatedAt])
+  return (
+    <PickRow
+      testid={`home-all-${note.id}`}
+      onClick={() => onOpenNote(note.id)}
+      title={note.title || 'Untitled note'}
+      sub={sub}
+      context={context}
+      time={time}
+    />
   )
 }
 
