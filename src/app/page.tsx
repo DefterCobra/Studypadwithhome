@@ -40,7 +40,7 @@ import { cn } from '@/lib/utils'
 import { useNotepadStore, useSelectedNote, resetPadToSeeds } from '@/lib/notepad/store'
 import { hasStoredData } from '@/lib/notepad/idb-storage'
 import { setActiveUserId } from '@/lib/notepad/active-user'
-import { allUsers, useUsersStore } from '@/lib/notepad/users'
+import { allUsers, useUsersStore, LAST_USER_KEY } from '@/lib/notepad/users'
 import type { EditorFocusMode, MobileView, NotepadBackup } from '@/lib/notepad/types'
 import { useToast } from '@/hooks/use-toast'
 import { useChromeVisibility } from '@/hooks/use-chrome-visibility'
@@ -67,13 +67,17 @@ import { usePrefsStore } from '@/lib/prefs'
 
 const emptySubscribe = () => () => {}
 
-/** localStorage key for the "last used" marker on the user-selection gate */
-const LAST_USER_KEY = 'studypad-last-user-v1'
-
 /** The full notepad workspace for one user. Mounted with key={userId} so
  *  switching users rebuilds all local UI state on top of the rehydrated
  *  partition — nothing of the previous user's view can leak through. */
-function NotepadWorkspace({ onSwitchUser }: { onSwitchUser: (userId: string) => void }) {
+function NotepadWorkspace({
+  onSwitchUser,
+  onUserDeleted,
+}: {
+  onSwitchUser: (userId: string) => void
+  /** a profile was removed in Manage users — back to the gate if it was this one */
+  onUserDeleted: (userId: string, name: string) => void
+}) {
   // hydration-safe "mounted" flag (false during SSR/hydration, true after)
   const mounted = useSyncExternalStore(
     emptySubscribe,
@@ -374,7 +378,7 @@ function NotepadWorkspace({ onSwitchUser }: { onSwitchUser: (userId: string) => 
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
-          {/* multi-user: switch or add users — sits right beside the data menu */}
+          {/* multi-user: switch users or manage profiles — sits beside the data menu */}
           <UserMenu
             onSwitchUser={onSwitchUser}
             onUserAdded={(name) =>
@@ -383,6 +387,13 @@ function NotepadWorkspace({ onSwitchUser }: { onSwitchUser: (userId: string) => 
                 description: `${name} was created — switch from the user menu anytime.`,
               })
             }
+            onUserRenamed={(name) =>
+              toast({
+                title: 'User renamed',
+                description: `This profile is now called ${name}. Their notes stayed with them.`,
+              })
+            }
+            onUserDeleted={onUserDeleted}
           />
         </div>
         </div>
@@ -627,9 +638,30 @@ export default function Home() {
     [userId, toast],
   )
 
+  // removing the profile that is currently open signs out to the gate;
+  // removing any other profile just tidies the registry
+  // (declared before the early return — hooks must run in a fixed order)
+  const handleUserDeleted = useCallback(
+    (id: string, name: string) => {
+      if (id === userId) {
+        setUserId(null)
+        toast({
+          title: `${name} removed`,
+          description: 'Their notepad was deleted from this device. Pick a user to continue.',
+        })
+      } else {
+        toast({
+          title: `${name} removed`,
+          description: 'Their notepad was deleted from this device.',
+        })
+      }
+    },
+    [userId, toast],
+  )
+
   if (!userId) {
     return <UserGate onEnter={enterUser} busy={switchingTo} lastUserId={lastUserId} />
   }
 
-  return <NotepadWorkspace key={userId} onSwitchUser={enterUser} />
+  return <NotepadWorkspace key={userId} onSwitchUser={enterUser} onUserDeleted={handleUserDeleted} />
 }

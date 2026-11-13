@@ -5,11 +5,11 @@
  *
  * One entry point for everything multi-user while inside a workspace:
  * switch to any registered user (each user's whole data partition is
- * swapped in) and add a new user. Adding from here keeps the current
- * workspace open — the caller decides whether to switch.
+ * swapped in) and open Manage users — the modal that renames, deletes
+ * and adds profiles on this device.
  */
 import { useState } from 'react'
-import { Check, CircleUserRound, UserPlus } from 'lucide-react'
+import { Check, CircleUserRound, Users } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
@@ -19,20 +19,24 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { NameDialog } from '@/components/notepad/name-dialog'
+import { ManageUsersDialog } from '@/components/notepad/manage-users-dialog'
 import { allUsers, useUsersStore } from '@/lib/notepad/users'
 
 interface UserMenuProps {
   /** enter another user's workspace (loading is handled by the caller) */
   onSwitchUser: (userId: string) => void
-  /** a user was created from this menu */
+  /** a user was created from the manage dialog (caller shows the toast) */
   onUserAdded?: (name: string) => void
+  /** a user was renamed from the manage dialog (caller shows the toast) */
+  onUserRenamed?: (name: string) => void
+  /** a user was fully removed — the caller exits to the gate if it was current */
+  onUserDeleted?: (id: string, name: string) => void
 }
 
-export function UserMenu({ onSwitchUser, onUserAdded }: UserMenuProps) {
+export function UserMenu({ onSwitchUser, onUserAdded, onUserRenamed, onUserDeleted }: UserMenuProps) {
   const users = useUsersStore((s) => s.users)
   const currentUserId = useUsersStore((s) => s.currentUserId)
-  const [addOpen, setAddOpen] = useState(false)
+  const [manageOpen, setManageOpen] = useState(false)
 
   const everyone = allUsers(users)
   const current = everyone.find((u) => u.id === currentUserId) ?? everyone[0]
@@ -45,8 +49,8 @@ export function UserMenu({ onSwitchUser, onUserAdded }: UserMenuProps) {
             variant="outline"
             size="sm"
             className="h-8 gap-1.5"
-            aria-label={`User menu — current user ${current.name}; switch or add users`}
-            title="Switch or add users"
+            aria-label={`User menu — current user ${current.name}; switch users or manage profiles`}
+            title="Switch users or manage profiles"
             data-testid="user-menu-button"
           >
             <span
@@ -82,27 +86,23 @@ export function UserMenu({ onSwitchUser, onUserAdded }: UserMenuProps) {
           ))}
           <DropdownMenuSeparator />
           <DropdownMenuItem
-            data-testid="add-user-item"
-            onClick={() => setAddOpen(true)}
+            data-testid="manage-users-item"
+            onClick={() => setManageOpen(true)}
           >
-            <UserPlus className="h-4 w-4" /> Add user
+            <Users className="h-4 w-4" /> Manage users
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
 
-      {addOpen && (
-        <NameDialog
-          title="Add a user"
-          label="Name"
-          showColor
-          submitLabel="Create user"
-          onOpenChange={() => setAddOpen(false)}
-          onSubmit={(name, color) => {
-            const user = useUsersStore.getState().addUser(name, color)
-            onUserAdded?.(user.name)
-          }}
-        />
-      )}
+      <ManageUsersDialog
+        open={manageOpen}
+        onOpenChange={setManageOpen}
+        onUserChanged={(kind, name) => {
+          if (kind === 'added') onUserAdded?.(name)
+          else onUserRenamed?.(name)
+        }}
+        onUserDeleted={onUserDeleted}
+      />
     </>
   )
 }

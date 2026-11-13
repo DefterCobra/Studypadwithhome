@@ -55,7 +55,7 @@ function legacyDb(): LocalForageInstance {
 }
 
 /** the partition the storage layer should talk to right now */
-function activeDb(): LocalForage {
+function activeDb(): LocalForageInstance {
   return dbFor(getActiveUserId())
 }
 
@@ -111,6 +111,21 @@ export const idbStorage: StateStorage = {
   removeItem: async (name) => {
     await activeDb().removeItem(name)
   },
+}
+
+/**
+ * Wipe a user's whole partition (Manage Users → delete): every key in the
+ * user's object store is removed and the cached localforage instance is
+ * evicted, so nothing of that user survives in memory either. Best effort —
+ * a storage failure must never block the removal itself.
+ */
+export async function clearUserPartition(userId: string): Promise<void> {
+  try {
+    await dbFor(userId).clear()
+  } catch {
+    // storage unavailable — nothing to wipe
+  }
+  userInstances.delete(userId)
 }
 
 /** no-op storage used during SSR — reads find nothing, writes go nowhere, so

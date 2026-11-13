@@ -12,16 +12,11 @@ import {
 import { Button } from '@/components/ui/button'
 import { hasStoredData } from '@/lib/notepad/idb-storage'
 import { GUEST_USER_ID } from '@/lib/notepad/active-user'
-import { useUsersStore } from '@/lib/notepad/users'
+import { useUsersStore, userWelcomeKey } from '@/lib/notepad/users'
 import { useNotepadStore } from '@/lib/notepad/store'
 
 /** legacy global flag from before multi-user existed — Guest inherits it */
 const WELCOME_KEY = 'studypad-welcomed-v1'
-
-/** the welcome question is answered once per user, not once per browser */
-function userWelcomeKey(userId: string): string {
-  return `studypad-welcomed-u-${userId}`
-}
 
 interface VisitInfo {
   /** ask the keep-or-fresh question now */

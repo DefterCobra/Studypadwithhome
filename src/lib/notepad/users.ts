@@ -17,6 +17,7 @@
 import { create } from 'zustand'
 import { GUEST_USER_ID } from './active-user'
 import { SUBJECT_COLORS } from './constants'
+import { clearUserPartition } from './idb-storage'
 
 export interface PadUser {
   id: string
@@ -36,6 +37,14 @@ export const GUEST_USER: PadUser = {
 
 const REGISTRY_KEY = 'studypad-users-v1'
 const MAX_NAME = 40
+
+/** localStorage marker for "the user who entered last" (read by the gate) */
+export const LAST_USER_KEY = 'studypad-last-user-v1'
+
+/** per-user welcome-dialog marker — deleting a user removes theirs */
+export function userWelcomeKey(userId: string): string {
+  return `studypad-welcomed-u-${userId}`
+}
 
 function uid(): string {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
@@ -93,6 +102,9 @@ interface UsersState {
   loaded: boolean
   init: () => void
   addUser: (name: string, color?: string) => PadUser
+  renameUser: (id: string, name: string) => void
+  /** removes the user, their whole IndexedDB partition and per-user markers */
+  removeUser: (id: string) => void
   setCurrentUserId: (id: string | null) => void
 }
 
@@ -122,6 +134,44 @@ export const useUsersStore = create<UsersState>()((set, get) => ({
     }
     set({ users: [...users, user] })
     return user
+  },
+
+  renameUser: (id, name) => {
+    if (id === GUEST_USER_ID) return
+    const trimmed = name.trim().slice(0, MAX_NAME)
+    if (!trimmed) return
+    const users = get().users.map((u) => (u.id === id ? { ...u, name: trimmed } : u))
+    try {
+      window.localStorage.setItem(REGISTRY_KEY, JSON.stringify(users))
+    } catch {
+      // registry write failed — the rename still applies this session
+    }
+    set({ users })
+  },
+
+  removeUser: (id) => {
+    if (id === GUEST_USER_ID) return
+    const users = get().users.filter((u) => u.id !== id)
+    try {
+      window.localStorage.setItem(REGISTRY_KEY, JSON.stringify(users))
+    } catch {
+      // registry write failed — the user is still gone this session
+    }
+    // wipe everything the user owned on this device (best effort)
+    void clearUserPartition(id)
+    try {
+      window.localStorage.removeItem(userWelcomeKey(id))
+    } catch {
+      // cosmetic only
+    }
+    try {
+      if (window.localStorage.getItem(LAST_USER_KEY) === id) {
+        window.localStorage.removeItem(LAST_USER_KEY)
+      }
+    } catch {
+      // cosmetic only
+    }
+    set({ users, ...(get().currentUserId === id ? { currentUserId: null } : {}) })
   },
 
   setCurrentUserId: (id) => set({ currentUserId: id }),
